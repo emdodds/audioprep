@@ -6,6 +6,7 @@ Created on Mon Aug 10 13:17:43 2015
 """
 
 from os import listdir
+import scipy
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.mlab import specgram
@@ -42,6 +43,16 @@ def logfpsd(data, rate, window, noverlap, fmin, bins_per_octave):
     logfpsd = np.sqrt(np.dot(mapping,(np.abs(stft)**2)))
     
     return logfpsd.T, logffreqs, times
+    
+def interp_logpsd(data, rate, window, noverlap, freqs, interpolation='linear'):
+    """Computes linear-frequency power spectral density, then uses interpolation
+    (linear by default) to estimate the psd at the desired frequencies."""
+    stft, linfreqs, times = specgram(data, window, Fs=rate, noverlap=noverlap)
+    ntimes = len(times)
+    logpsd = np.log10(np.abs(stft.T)**2)
+    interps = [scipy.interpolate.interp1d(linfreqs, logpsd[t,:], kind=interpolation) for t in range(ntimes)]
+    interped_logpsd = np.array([interps[t](freqs) for t in range(ntimes)])
+    return interped_logpsd, freqs, times
 
 def CQTPSD(signal, sr, fmin, fmax, bins_per_octave, res=.1):
     """Plots and returns the analog of a power spectal density from a constant Q transform."""
@@ -56,9 +67,10 @@ def CQTPSD(signal, sr, fmin, fmax, bins_per_octave, res=.1):
     plt.title("logPSD-like thing from CQT")
     return logpsdish
 
-def wav_to_spectro(infolder='../speech_corpora/TIMIT/', outfolder='../Spectrograms/'):
+def wav_to_spectro(infolder='../speech_corpora/TIMIT/', outfolder='../Spectrograms/', interpolation = 'linear', max_number=None):
     """Takes all the .wav files in the given folder and makes files containing
-    spectrograms according to the parameters in Carlson et al."""
+    spectrograms according to the parameters in Carlson et al.
+    Stops after max_number spectrograms if specified."""
     # number of time points in each spectrogram
     ntimepoints = 25
     
@@ -66,7 +78,7 @@ def wav_to_spectro(infolder='../speech_corpora/TIMIT/', outfolder='../Spectrogra
     nfreqs = 256
     fmin = 100
     fmax = 4000
-    bins_per_octave = (-1.+nfreqs)/np.log2(fmax/fmin)
+    #bins_per_octave = (-1.+nfreqs)/np.log2(fmax/fmin)
     freqs = np.logspace(np.log10(fmin), np.log10(fmax), num=nfreqs)
     
     # FFT window parameters, in seconds
@@ -74,6 +86,7 @@ def wav_to_spectro(infolder='../speech_corpora/TIMIT/', outfolder='../Spectrogra
     overlap = .008
     
     infilelist = listdir(infolder)
+    count = 0
     for infilename in infilelist:
     #filename = "../speech_corpora/TIMIT/SA1_FADG0_DR4_TEST.WAV"
         infile = infolder+infilename
@@ -82,15 +95,16 @@ def wav_to_spectro(infolder='../speech_corpora/TIMIT/', outfolder='../Spectrogra
             continue
         signal, sr = wavload(infile, sr = None)
         
-        logfpsd_, logffreqs, times = logfpsd(signal,sr,int(window*sr*2),int(overlap*sr*2),fmin,bins_per_octave)
-
+        #logfpsd_, logffreqs, times = logfpsd(signal,sr,int(window*sr*2),int(overlap*sr*2),fmin,bins_per_octave)
+        logflogpsd, logffreqs, times = interp_logpsd(signal, sr, int(window*sr*2), int(overlap*sr*2), freqs, interpolation)
+        
         try:
             assert np.allclose(freqs, logffreqs[:nfreqs])
         except AssertionError:
             print (logffreqs[:nfreqs])
             print (freqs)
             raise AssertionError
-        logflogpsd = np.log10(logfpsd_[:,:nfreqs])
+        #logflogpsd = np.log10(logfpsd_[:,:nfreqs])
         
         nchunks = int(logflogpsd.shape[0]/ntimepoints)
         for chunk in range(nchunks):
@@ -98,7 +112,35 @@ def wav_to_spectro(infolder='../speech_corpora/TIMIT/', outfolder='../Spectrogra
             finish = ntimepoints*(chunk+1)
             outfile = outfolder + infilename[:-4] + str(chunk)
             np.save(outfile, logflogpsd[start:finish,:])
+            count = count + 1
+        if max_number is not None and count > max_number:
+            return
             
+def view_sample_spectros(infolder='../Spectrograms/'):
+    infilelist = listdir(infolder)
+    infilelist = [f for f in infilelist if f.lower().endswith('.npy')]
+    plt.figure()
+    plt.clf()
+    array = None
+    for i in range(9):
+        infile = infolder + infilelist.pop()
+        array = np.load(infile).T
+        plt.subplot(3,3,i+1)
+        plt.imshow(array, interpolation= 'nearest', cmap='jet', aspect='auto')
+        plt.gca().invert_yaxis()
+    plt.show()
+    return array
+    
+def view_old_spectros():
+    spectros = scipy.io.loadmat("../speechdata.mat")["speechdata0"][:,:,:9]
+    plt.figure()
+    plt.clf()
+    for i in range(9):
+        array = spectros[:,:,i]
+        plt.subplot(3,3,i+1)
+        plt.imshow(array, interpolation= 'nearest', cmap='jet', aspect='auto')
+        plt.gca().invert_yaxis()
+    plt.show()
 
 def pca_reduce(infolder='../Spectrograms/', num_to_fit=30000, outfile='../Data/processedspeech',
                ncomponents=200, pcafilename = '../Data/speechpca.pickle', whiten = True):
@@ -124,7 +166,7 @@ def pca_reduce(infolder='../Spectrograms/', num_to_fit=30000, outfile='../Data/p
         array = np.load(infile)
         trainingdata[count] = array.flatten()
     
-    trainingdata = trainingdata[:count,:]
+    trainingdata = trainingdata[:count+1,:]
     trainingdata = np.nan_to_num(trainingdata)
     trainingdata = np.clip(trainingdata,-1000,1000) # just in case something funny happened with logs
     
@@ -136,20 +178,63 @@ def pca_reduce(infolder='../Spectrograms/', num_to_fit=30000, outfile='../Data/p
     
     # create and fit PCA object
     pca = PCA(dim=ncomponents, whiten=whiten)
+    print ("Fitting the PCA...")
     pca.fit(trainingdata)
-    
+    print ("Done.")
     # transform all the input arrays
+    print ("Transforming...")
     allvectors = np.zeros((nfiles,ncomponents))
-    allvectors[:count,:] = pca.transform(trainingdata)
+    allvectors[:count+1,:] = pca.transform(trainingdata)
     del trainingdata # clear up memory
     for infilename in infilelist:
+        count = count+1
         infile = infolder + infilename
         vector = np.load(infile).flatten()
-        allvectors[count] = pca.transform(vector)
+        allvectors[count,:] = pca.transform(vector)
     
     np.save(outfile, allvectors)    
     
     with open(pcafilename, 'wb') as f:
         pickle.dump([pca, origshape, trainingdatamean, trdata_std], f)
+    
+    print ("Done")
 
+    # plot the first 9 principal components
+    PCs = pca.eVectors
+    plt.figure()
+    for i in range(9):
+        plt.subplot(3,3,i+1)
+        plt.imshow(PCs[i,:].reshape(origshape), interpolation= 'nearest', cmap='jet', aspect='auto')
+        plt.gca().invert_yaxis()
+    plt.show()
+    
     return allvectors, pca, origshape, trainingdatamean, trdata_std
+    
+    
+# Functions for testing how the preprocessing worked
+    
+def view_PCs(pcafile = '../Data/speechpca.pickle', first=0):
+    with open(pcafile,'rb') as f:
+        pca, origshape, datamean, datastd = pickle.load(f)
+    PCs = pca.eVectors
+    plt.figure()
+    for i in range(9):
+        plt.subplot(3,3,i+1)
+        plt.imshow(PCs[i+first,:].reshape(origshape).T, interpolation= 'nearest', cmap='jet', aspect='auto')
+        plt.gca().invert_yaxis()
+    plt.show()
+ 
+def sample_recons(infile='../Data/processedspeech.npy', pcafile = '../Data/speechpca.pickle'):
+    vectors = np.load(infile)
+    with open(pcafile,'rb') as f:
+        pca, origshape, datamean, datastd = pickle.load(f)
+    plt.figure()
+    for i in range(9):
+        plt.subplot(3,3,i+1)
+        plt.imshow(pca.inverse_transform(vectors[i,:]).reshape(origshape).T, interpolation= 'nearest', cmap='jet', aspect='auto')
+        plt.gca().invert_yaxis()
+    plt.show()
+    
+# TODO: the above function doesn't work, don't know why. Also need to run pca_reduce again since it had
+    # a really dumb error in it before
+    
