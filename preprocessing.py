@@ -123,7 +123,7 @@ def view_sample_spectros(infolder='../Spectrograms/'):
     plt.clf()
     array = None
     for i in range(9):
-        infile = infolder + infilelist.pop()
+        infile = infolder + infilelist[i]
         array = np.load(infile).T
         plt.subplot(3,3,i+1)
         plt.imshow(array, interpolation= 'nearest', cmap='jet', aspect='auto')
@@ -190,6 +190,9 @@ def pca_reduce(infolder='../Spectrograms/', num_to_fit=30000, outfile='../Data/p
         count = count+1
         infile = infolder + infilename
         vector = np.load(infile).flatten()
+        # center and normalize
+        vector = vector - trainingdatamean
+        vector = vector/trdata_std
         allvectors[count,:] = pca.transform(vector)
     
     np.save(outfile, allvectors)    
@@ -228,13 +231,13 @@ def sample_recons(infile='../Data/processedspeech.npy', pcafile = '../Data/speec
     vectors = np.load(infile)
     with open(pcafile,'rb') as f:
         pca, origshape, datamean, datastd = pickle.load(f)
+    recons = []
     plt.figure()
     for i in range(9):
         plt.subplot(3,3,i+1)
-        plt.imshow(pca.inverse_transform(vectors[i,:]).reshape(origshape).T, interpolation= 'nearest', cmap='jet', aspect='auto')
+        recon = pca.inverse_transform(vectors[-i,:]).reshape(origshape)
+        recons.append(recon)
+        plt.imshow(recon.T, interpolation= 'nearest', cmap='jet', aspect='auto')
         plt.gca().invert_yaxis()
     plt.show()
-    
-# TODO: the above function doesn't work, don't know why. Also need to run pca_reduce again since it had
-    # a really dumb error in it before
-    
+    return np.array(recons)
