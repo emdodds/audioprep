@@ -15,6 +15,28 @@ from librosa.core import load as wavload
 from pca.pca import PCA # Jesse Livezey's PCA class
 import pickle
 
+#### Constants ####
+# number of time points in each spectrogram
+ntimepoints = 25
+
+# frequencies to sample
+nfreqs = 256
+fmin = 100
+fmax = 4000
+#bins_per_octave = (-1.+nfreqs)/np.log2(fmax/fmin)
+freqs = np.logspace(np.log10(fmin), np.log10(fmax), num=nfreqs)
+# interpolation method to go from linearly spaced frequencies to those specified above
+interpolation = 'linear'
+
+# FFT window parameters, in seconds
+window = .016
+overlap = .008
+
+# cutoff for eliminating silent portions
+cutoff = 10**(-6)
+
+########
+
 def logfpsd(data, rate, window, noverlap, fmin, bins_per_octave):
     """Computes ordinary linear-frequency power spectral density, then multiplies by a matrix
     that converts to log-frequency space.
@@ -67,45 +89,36 @@ def CQTPSD(signal, sr, fmin, fmax, bins_per_octave, res=.1):
     plt.title("logPSD-like thing from CQT")
     return logpsdish
 
-def wav_to_spectro(infolder='../speech_corpora/TIMIT/', outfolder='../Spectrograms/', interpolation = 'linear', max_number=None):
+def wav_to_logPSD(infile):
+    """Read in .wav file, return the log power spectral density with the frequency axis
+determined by the constant freqs."""           
+    signal, sr = wavload(infile, sr = None)
+    
+    signal = signal/(10*np.var(signal)) #9/26/2015: I don't know why this is done, copied from Carlson's code
+    signal = signal - np.mean(signal)        
+    
+    #logfpsd_, logffreqs, times = logfpsd(signal,sr,int(window*sr*2),int(overlap*sr*2),fmin,bins_per_octave)
+    logflogpsd, logffreqs, times = interp_logpsd(signal, sr, int(window*sr), int(overlap*sr), freqs, interpolation)
+    #9/25/2015: removed factors of 2 in int() things, to match Carlson's code
+
+    # remove segments of the PSD with total power below cutoff
+    abovethebar = (np.sum(10**logflogpsd,axis=1) > cutoff)
+    return logflogpsd[abovethebar,:]
+
+def wav_to_spectro(infolder='../speech_corpora/TIMIT/', outfolder='../Spectrograms/', max_number=None):
     """Takes all the .wav files in the given folder and makes files containing
     spectrograms according to the parameters in Carlson et al.
     Stops after max_number spectrograms if specified."""
-    # number of time points in each spectrogram
-    ntimepoints = 25
-    
-    # frequencies to sample
-    nfreqs = 256
-    fmin = 100
-    fmax = 4000
-    #bins_per_octave = (-1.+nfreqs)/np.log2(fmax/fmin)
-    freqs = np.logspace(np.log10(fmin), np.log10(fmax), num=nfreqs)
-    
-    # FFT window parameters, in seconds
-    window = .016
-    overlap = .008
-    
+            
     infilelist = listdir(infolder)
     count = 0
     for infilename in infilelist:
     #filename = "../speech_corpora/TIMIT/SA1_FADG0_DR4_TEST.WAV"
-        infile = infolder+infilename
-        if infile[-4:].lower() != '.wav':
-            # ignore anything that isn't a .wav file
+        if not infilename.lower().endswith('.wav'):
             continue
-        signal, sr = wavload(infile, sr = None)
-        
-        #logfpsd_, logffreqs, times = logfpsd(signal,sr,int(window*sr*2),int(overlap*sr*2),fmin,bins_per_octave)
-        logflogpsd, logffreqs, times = interp_logpsd(signal, sr, int(window*sr*2), int(overlap*sr*2), freqs, interpolation)
-        
-        try:
-            assert np.allclose(freqs, logffreqs[:nfreqs])
-        except AssertionError:
-            print (logffreqs[:nfreqs])
-            print (freqs)
-            raise AssertionError
-        #logflogpsd = np.log10(logfpsd_[:,:nfreqs])
-        
+            # ignore anything that isn't a .wav file
+        logflogpsd = wav_to_logPSD(infolder+infilename)
+              
         nchunks = int(logflogpsd.shape[0]/ntimepoints)
         for chunk in range(nchunks):
             start = ntimepoints*chunk
@@ -213,7 +226,61 @@ def pca_reduce(infolder='../Spectrograms/', num_to_fit=30000, outfile='../Data/p
     
     return allvectors, pca, origshape, trainingdatamean, trdata_std
     
+def wav_to_PCA(infolder='../speech_corpora/TIMIT/', outfile='../Data/processedspeech2.npy', 
+               pcafilename = '../Data/spectropca2.pickle', ncomponents = 200, whiten = True):
+    """Do the whole preprocessing scheme at once, saving a pickled PCA object and a .npy array with the data in the reduced
+representation. Unreduced spectrograms are not saved. Since these are all stored at once and the covariance matrix for all of them
+is computed, this method requires a substantial amount of RAM (something like 8GB for the TIMIT data set)."""
+    infilelist = listdir(infolder)
     
+    allspectros = [] # don't know length in advance, use list for flexible append
+    for infilename in infilelist:
+        if not infilename.lower().endswith('.wav'):
+            continue # ignore anything that isn't a .wav file
+        logflogpsd = wav_to_logPSD(infolder+infilename)
+        
+        nchunks = int(logflogpsd.shape[0]/ntimepoints)
+        somespectros = np.zeros((nchunks,ntimepoints*nfreqs))
+        for chunk in range(nchunks):
+            # convert each chunk to a vector and store. the last chunk is ignored if it's incomplete
+            start = ntimepoints*chunk
+            finish = ntimepoints*(chunk+1)
+            somespectros[chunk] = logflogpsd[start:finish,:].flatten()
+        allspectros.append(somespectros)
+    allspectros = np.array(allspectros)
+    
+    # center and normalize spectrograms
+    allspectros = np.nan_to_num(allspectros)
+    allspectros = np.clip(allspectros,-1000,1000)
+    datamean = np.mean(allspectros, axis=0)
+    allspectros = allspectros - datamean
+    datastd = np.std(allspectros, axis=0)
+    allspectros = allspectros/datastd
+    
+    # do PCA
+    pca = PCA(dim=ncomponents, whiten=whiten)
+    print ("Fitting the PCA...")
+    pca.fit(allspectros)
+    print ("Done. Transforming and saving vectors...")
+    reduced = pca.transform(allspectros)
+    
+    np.save(outfile, reduced)    
+    with open(pcafilename, 'wb') as f:
+        pickle.dump([pca, (ntimepoints, nfreqs), datamean, datastd], f)    
+    print ("Done")
+
+    if(input("Plot 9 principal components? Say y for yes, or anything else for no.") == "y"):
+        # plot the first 9 principal components
+        PCs = pca.eVectors
+        plt.figure()
+        for i in range(9):
+            plt.subplot(3,3,i+1)
+            plt.imshow(PCs[i,:].reshape((ntimepoints,nfreqs)), interpolation= 'nearest', cmap='jet', aspect='auto')
+            plt.gca().invert_yaxis()
+        plt.show()
+    
+    return reduced, pca, (ntimepoints, nfreqs), datamean, datastd
+
 # Functions for testing how the preprocessing worked
     
 def view_PCs(pcafile = '../Data/speechpca.pickle', first=0):
