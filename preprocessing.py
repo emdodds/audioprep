@@ -12,6 +12,9 @@ import matplotlib.pyplot as plt
 from matplotlib.mlab import specgram
 from librosa.core import constantq
 from librosa.core import load as wavload
+import pca
+import sys
+sys.modules['pca.pca'] = pca
 from pca.pca import PCA # Jesse Livezey's PCA class
 import pickle
 
@@ -233,20 +236,18 @@ representation. Unreduced spectrograms are not saved. Since these are all stored
 is computed, this method requires a substantial amount of RAM (something like 8GB for the TIMIT data set)."""
     infilelist = listdir(infolder)
     
-    allspectros = [] # don't know length in advance, use list for flexible append
+    allspectros = [] # don't know length in advance, use list for flexible append. there's probably a faster way
     for infilename in infilelist:
         if not infilename.lower().endswith('.wav'):
             continue # ignore anything that isn't a .wav file
         logflogpsd = wav_to_logPSD(infolder+infilename)
         
         nchunks = int(logflogpsd.shape[0]/ntimepoints)
-        somespectros = np.zeros((nchunks,ntimepoints*nfreqs))
         for chunk in range(nchunks):
             # convert each chunk to a vector and store. the last chunk is ignored if it's incomplete
             start = ntimepoints*chunk
             finish = ntimepoints*(chunk+1)
-            somespectros[chunk] = logflogpsd[start:finish,:].flatten()
-        allspectros.append(somespectros)
+            allspectros.append(logflogpsd[start:finish,:].flatten())
     allspectros = np.array(allspectros)
     
     # center and normalize spectrograms
