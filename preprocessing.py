@@ -33,7 +33,7 @@ window = .016
 overlap = .008
 
 # cutoff for eliminating silent portions
-cutoff = 10**(-6)
+cutoff = 10**(-12) # Carlson used 10**(-6)
 
 ########
 
@@ -227,7 +227,7 @@ def pca_reduce(infolder='../Spectrograms/', num_to_fit=30000, outfile='../Data/p
     return allvectors, pca, origshape, trainingdatamean, trdata_std
     
 def wav_to_PCA(infolder='../speech_corpora/TIMIT/', outfile='../Data/processedspeech2.npy', 
-               pcafilename = '../Data/spectropca2.pickle', ncomponents = 200, whiten = True):
+               pcafilename = '../Data/spectropca2.pickle', testfile = 'test2.npy', ncomponents = 200, whiten = True):
     """Do the whole preprocessing scheme at once, saving a pickled PCA object and a .npy array with the data in the reduced
 representation. Unreduced spectrograms are not saved. Since these are all stored at once and the covariance matrix for all of them
 is computed, this method requires a substantial amount of RAM (something like 8GB for the TIMIT data set)."""
@@ -267,17 +267,12 @@ is computed, this method requires a substantial amount of RAM (something like 8G
     np.save(outfile, reduced)    
     with open(pcafilename, 'wb') as f:
         pickle.dump([pca, (ntimepoints, nfreqs), datamean, datastd], f)    
-    print ("Done")
+    print ("Done.")
 
-    if(input("Plot 9 principal components? Say y for yes, or anything else for no.") == "y"):
-        # plot the first 9 principal components
-        PCs = pca.eVectors
-        plt.figure()
-        for i in range(9):
-            plt.subplot(3,3,i+1)
-            plt.imshow(PCs[i,:].reshape((ntimepoints,nfreqs)), interpolation= 'nearest', cmap='jet', aspect='auto')
-            plt.gca().invert_yaxis()
-        plt.show()
+    # save a file with 9 example spectrograms and their reconstructions
+    comparison = allspectros[:9,:]
+    recons = pca.inverse_transform(reduced[:9,:])
+    np.save(testfile, np.concatenate((comparison, recons),axis=0))
     
     return reduced, pca, (ntimepoints, nfreqs), datamean, datastd
 
@@ -302,7 +297,7 @@ def sample_recons(infile='../Data/processedspeech.npy', pcafile = '../Data/speec
     plt.figure()
     for i in range(9):
         plt.subplot(3,3,i+1)
-        recon = pca.inverse_transform(vectors[-i,:]).reshape(origshape)
+        recon = pca.inverse_transform(vectors[i,:]).reshape(origshape)
         recons.append(recon)
         plt.imshow(recon.T, interpolation= 'nearest', cmap='jet', aspect='auto')
         plt.gca().invert_yaxis()
