@@ -239,7 +239,7 @@ is computed, this method requires a substantial amount of RAM (something like 8G
     for pth, subd, files in os.walk(infolder):
         for fname in files:
             fstring = os.path.join(pth,fname)
-            if fstring.lower().endswith('.wav')
+            if fstring.lower().endswith('.wav'):
                 infilelist.append(fstring)
    # infilelist = listdir(infolder)
     
