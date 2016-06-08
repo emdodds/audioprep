@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from matplotlib.mlab import specgram
 from librosa.core import constantq
 from librosa.core import load as wavload
+from librosa.core import resample
 from pca.pca import PCA # Jesse Livezey's PCA class
 import pickle
 
@@ -19,11 +20,14 @@ import pickle
 # number of time points in each spectrogram
 ntimepoints = 25
 
+# sample rate; all waveforms resampled to this rate
+samplerate = 16000
+
 # frequencies to sample
 nfreqs = 256
 fmin = 100
 fmax = 4000
-#bins_per_octave = (-1.+nfreqs)/np.log2(fmax/fmin)
+bins_per_octave = (-1.+nfreqs)/np.log2(fmax/fmin) #used for logfpsd
 freqs = np.logspace(np.log10(fmin), np.log10(fmax), num=nfreqs)
 # interpolation method to go from linearly spaced frequencies to those specified above
 interpolation = 'linear'
@@ -69,7 +73,7 @@ def logfpsd(data, rate, window, noverlap, fmin, bins_per_octave):
 def interp_logpsd(data, rate, window, noverlap, freqs, interpolation='linear'):
     """Computes linear-frequency power spectral density, then uses interpolation
     (linear by default) to estimate the psd at the desired frequencies."""
-    stft, linfreqs, times = specgram(data, window, Fs=rate, noverlap=noverlap)
+    stft, linfreqs, times = specgram(data, window, Fs=rate, noverlap=noverlap, window = np.hamming(window))
     ntimes = len(times)
     logpsd = np.log10(np.abs(stft.T)**2)
     interps = [scipy.interpolate.interp1d(linfreqs, logpsd[t,:], kind=interpolation) for t in range(ntimes)]
@@ -92,11 +96,13 @@ def CQTPSD(signal, sr, fmin, fmax, bins_per_octave, res=.1):
 def wav_to_logPSD(infile):
     """Read in .wav file, return the log power spectral density with the frequency axis
 determined by the constant freqs."""           
-    signal, sr = wavload(infile, sr = None)
+    signal, nativerate = wavload(infile, sr = None)
+    signal = resample(signal, nativerate, samplerate)
+    # Carlson's code seems to do this. I don't know why and I think it muddies the spectrograms but maybe I misunderstand something
+    #signal = signal/(10*np.var(signal))
+    #signal = signal - np.mean(signal)        
     
-    signal = signal/(10*np.var(signal)) #9/26/2015: I don't know why this is done, copied from Carlson's code
-    signal = signal - np.mean(signal)        
-    
+    sr = samplerate
     #logfpsd_, logffreqs, times = logfpsd(signal,sr,int(window*sr*2),int(overlap*sr*2),fmin,bins_per_octave)
     logflogpsd, logffreqs, times = interp_logpsd(signal, sr, int(window*sr), int(overlap*sr), freqs, interpolation)
     #9/25/2015: removed factors of 2 in int() things, to match Carlson's code
@@ -144,8 +150,8 @@ def view_sample_spectros(infolder='../Spectrograms/'):
     plt.show()
     return array
     
-def view_old_spectros():
-    spectros = scipy.io.loadmat("../speechdata.mat")["speechdata0"][:,:,:9]
+def view_old_spectros(start=0):
+    spectros = scipy.io.loadmat("../speechdata.mat")["speechdata0"][:,:,start:start+9]
     plt.figure()
     plt.clf()
     for i in range(9):
@@ -227,7 +233,7 @@ def pca_reduce(infolder='../Spectrograms/', num_to_fit=30000, outfile='../Data/p
     return allvectors, pca, origshape, trainingdatamean, trdata_std
     
 def wav_to_PCA(infolder='../speech_corpora/TIMIT/', outfile='../Data/processedspeech2.npy', 
-               pcafilename = '../Data/spectropca2.pickle', testfile = 'test2.npy', ncomponents = 200, whiten = True):
+               pcafilename = '../Data/spectropca2.pickle', testfile = '../Data/test2.npy', ncomponents = 200, whiten = True):
     """Do the whole preprocessing scheme at once, saving a pickled PCA object and a .npy array with the data in the reduced
 representation. Unreduced spectrograms are not saved. Since these are all stored at once and the covariance matrix for all of them
 is computed, this method requires a substantial amount of RAM (something like 8GB for the TIMIT data set)."""
@@ -252,10 +258,15 @@ is computed, this method requires a substantial amount of RAM (something like 8G
     # center and normalize spectrograms
     allspectros = np.nan_to_num(allspectros)
     allspectros = np.clip(allspectros,-1000,1000)
-    datamean = np.mean(allspectros, axis=0)
-    allspectros = allspectros - datamean
-    datastd = np.std(allspectros, axis=0)
-    allspectros = allspectros/datastd
+#    datamean = np.mean(allspectros, axis=0)
+#    allspectros = allspectros - datamean
+#    datastd = np.std(allspectros, axis=0)
+#    allspectros = allspectros/datastd
+    # Nicole's code seems to do this instead, centering each spectrogram
+    allspectros = allspectros - allspectros.mean(axis=1)[:,np.newaxis]
+    # for backwards compatibility, at least for now...
+    datamean = 0
+    datastd = 1
     
     # do PCA
     pca = PCA(dim=ncomponents, whiten=whiten)
@@ -289,8 +300,10 @@ def view_PCs(pcafile = '../Data/speechpca.pickle', first=0):
         plt.gca().invert_yaxis()
     plt.show()
  
-def sample_recons(infile='../Data/processedspeech.npy', pcafile = '../Data/speechpca.pickle'):
+def sample_recons(infile='../Data/processedspeech.npy', pcafile = '../Data/speechpca.pickle', which=None):
     vectors = np.load(infile)
+    if which is not None:
+        vectors = vectors[which]
     with open(pcafile,'rb') as f:
         pca, origshape, datamean, datastd = pickle.load(f)
     recons = []
