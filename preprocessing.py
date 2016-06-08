@@ -6,6 +6,7 @@ Created on Mon Aug 10 13:17:43 2015
 """
 
 from os import listdir
+import os
 import scipy
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,7 +14,8 @@ from matplotlib.mlab import specgram
 from librosa.core import constantq
 from librosa.core import load as wavload
 from librosa.core import resample
-from pca.pca import PCA # Jesse Livezey's PCA class
+import pca
+from pca import PCA # Jesse Livezey's PCA class
 import pickle
 
 #### Constants ####
@@ -232,30 +234,32 @@ def pca_reduce(infolder='../Spectrograms/', num_to_fit=30000, outfile='../Data/p
     
     return allvectors, pca, origshape, trainingdatamean, trdata_std
     
-def wav_to_PCA(infolder='../speech_corpora/TIMIT/', outfile='../Data/processedspeech2.npy', 
-               pcafilename = '../Data/spectropca2.pickle', testfile = '../Data/test2.npy', ncomponents = 200, whiten = True):
+def wav_to_PCA(infolder='../speech_corpora/', outfile='../Data/processedspeech3.npy', 
+               pcafilename = '../Data/spectropca3.pickle', testfile = 'test3.npy', ncomponents = 200, whiten = True):
     """Do the whole preprocessing scheme at once, saving a pickled PCA object and a .npy array with the data in the reduced
 representation. Unreduced spectrograms are not saved. Since these are all stored at once and the covariance matrix for all of them
 is computed, this method requires a substantial amount of RAM (something like 8GB for the TIMIT data set)."""
-    infilelist = listdir(infolder)
+    infilelist = []
+    for pth, subd, files in os.walk(infolder):
+        for fname in files:
+            fstring = os.path.join(pth,fname)
+            if fstring.lower().endswith('.wav'):
+                infilelist.append(fstring)
+   # infilelist = listdir(infolder)
     
-    allspectros = [] # don't know length in advance, use list for flexible append
+    allspectros = [] # don't know length in advance, use list for flexible append. there's probably a faster way
     for infilename in infilelist:
-        if not infilename.lower().endswith('.wav'):
-            continue # ignore anything that isn't a .wav file
-        logflogpsd = wav_to_logPSD(infolder+infilename)
+        logflogpsd = wav_to_logPSD(infilename)
         
         nchunks = int(logflogpsd.shape[0]/ntimepoints)
-        somespectros = np.zeros((nchunks,ntimepoints*nfreqs))
         for chunk in range(nchunks):
             # convert each chunk to a vector and store. the last chunk is ignored if it's incomplete
             start = ntimepoints*chunk
             finish = ntimepoints*(chunk+1)
-            somespectros[chunk] = logflogpsd[start:finish,:].flatten()
-        allspectros.append(somespectros)
+            allspectros.append(logflogpsd[start:finish,:].flatten())
     allspectros = np.array(allspectros)
     
-    # center and normalize spectrograms
+    # regularize, normalize spectrograms
     allspectros = np.nan_to_num(allspectros)
     allspectros = np.clip(allspectros,-1000,1000)
 #    datamean = np.mean(allspectros, axis=0)
