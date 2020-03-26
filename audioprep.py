@@ -22,11 +22,12 @@ except OSError as e:
     print("Can't make spectrograms because Matlab engine not compatible. Try using Python 3.4.")
     
 class PrepParams:
-    def __init__(self, transform='fourier', max_data = 80000, 
+    def __init__(self, transform='logspectro', max_data = 80000, 
                  max_at_once=80000, sample_rate=16000,
                  silence_cutoff = 1e-6, cutoff_type = 'pointwise', 
                  segment_length = 25, stride = 0.5,
-                 nPCs=200, whiten=True, **kwargs):
+                 nPCs=200, whiten=True,
+                 blocks=20000, **kwargs):
         self.max_data = max_data
         self.max_at_once = max_at_once
         self.silence_cutoff = silence_cutoff
@@ -74,7 +75,17 @@ class Spectrogram(Transformer):
         if self.pointwise_cutoff>0:
             mask = result.sum(1) > self.pointwise_cutoff
             result = result[mask,:]
-        return np.log10(result)
+        return result
+        
+    def silence_check_domain(self, data):
+        return data
+        
+class LogSpectrogram(Spectrogram):
+    def transform(self, signal):
+        return np.log10(super().transform(signal))
+        
+    def silence_check_domain(self, data):
+        return np.power(10,data)
         
 class CQT(Transformer):
     def __init__(self, sample_rate=16000, hop_length=128, fmin=100, fmax=None, nfreqs=256,
@@ -99,6 +110,9 @@ class CQT(Transformer):
         
     def get_size(self):
         return self.nfreqs
+        
+    def silence_check_domain(self, data):
+        return np.power(10,data)
         
         
 def get_file_list(directory):
@@ -132,12 +146,12 @@ def get_data(file_list, params, transformer, stride):
         
         for t in range(int((processed.shape[0]-params.segment_length)/stride)):
             #print("Of this file, trying segment " + str(t)+'\r',end='')
-            start = t*stride
+            start = int(t*stride)
             end = start + params.segment_length
             segment = processed[start:end,...]
             segment = segment - segment.mean()
             
-            if params.cutoff_type != 'segmentwise' or np.power(10,segment).mean() > params.silence_cutoff:
+            if params.cutoff_type != 'segmentwise' or transformer.silence_check_domain(segment).mean() > params.silence_cutoff:
                 data[ndata,:] = segment.flatten()
                 
                 ndata += 1
@@ -160,20 +174,21 @@ def files_to_data(directory, outfile, pcafile, params, prefit=False):
     file_list = get_file_list(directory)
     print ('Found ' + str(len(file_list)) + ' wav files. Processing...')
     
-    if params.transform == 'fourier':
-        if params.cutoff_type == 'pointwise':
-            pointwise_cutoff = params.silence_cutoff
-        else:
-            pointwise_cutoff = 0
-        transformer = Spectrogram(params.sample_rate, 
+    if params.cutoff_type == 'pointwise':
+        pointwise_cutoff = params.silence_cutoff
+    else:
+        pointwise_cutoff = 0    
+    
+    if params.transform == 'logspectro':
+        transformer = LogSpectrogram(params.sample_rate, 
                                   pointwise_cutoff = pointwise_cutoff,
                                   **params.specific)
     elif params.transform == 'cqt':
-        if params.cutoff_type == 'pointwise':
-            pointwise_cutoff = params.silence_cutoff
-        else:
-            pointwise_cutoff = 0
         transformer = CQT(sample_rate=params.sample_rate, 
+                                  pointwise_cutoff = pointwise_cutoff,
+                                  **params.specific)
+    elif params.transform == 'spectro':
+        transformer = Spectrogram(params.sample_rate, 
                                   pointwise_cutoff = pointwise_cutoff,
                                   **params.specific)
     else:
@@ -183,7 +198,7 @@ def files_to_data(directory, outfile, pcafile, params, prefit=False):
     
     stride = params.segment_length*params.stride
     ndata = 0
-    analyzer=None
+    analyzer = None
     reduced = np.zeros((0,params.nPCs))
     while ndata < params.max_data:
         data = get_data(file_list, params, transformer, stride)
@@ -205,7 +220,7 @@ def files_to_data(directory, outfile, pcafile, params, prefit=False):
             else:
                 analyzer = PCA(dim=params.nPCs, whiten=params.whiten)
                 print ("Fitting the PCA...")
-                analyzer.fit(data)
+                analyzer.fit(data, blocks = params.blocks)
                 savepca=True
         print ("Transforming vectors...")
         reduced = np.concatenate([reduced,analyzer.transform(data)],axis=0)
@@ -217,7 +232,7 @@ def files_to_data(directory, outfile, pcafile, params, prefit=False):
             pickle.dump([analyzer, origshape], f)   
         
     nsamples=10
-    samplerecons = analyzer.inverse_transform(reduced[-nsamples:])
+    samplerecons = analyzer.inverse_transform(reduced[:nsamples])
     plt.figure()
     for ii in range(nsamples):
         plt.subplot(2,10,ii+1)

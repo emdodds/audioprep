@@ -14,7 +14,6 @@ from matplotlib.mlab import specgram
 from librosa.core import constantq
 from librosa.core import load as wavload
 from librosa.core import resample
-import pca
 from pca import PCA # Jesse Livezey's PCA class
 import pickle
 
